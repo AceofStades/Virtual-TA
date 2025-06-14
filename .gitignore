@@ -193,5 +193,6 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-*.json
+discourse_cookies.json
+tds_course_scrape.json
 *.csv
