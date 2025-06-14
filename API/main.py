@@ -16,21 +16,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 
-# Vector search and embeddings
 from sentence_transformers import SentenceTransformer
 import faiss
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# OpenAI for GPT integration
 import openai
 from openai import OpenAI
+from dotenv import load_dotenv
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Pydantic models
 class LinkResponse(BaseModel):
     url: str
     text: str
@@ -58,7 +55,6 @@ class TDSVirtualTA:
             version="1.0.0"
         )
 
-        # Initialize components
         self.discourse_data = []
         self.embeddings = None
         self.faiss_index = None
@@ -67,13 +63,11 @@ class TDSVirtualTA:
         self.tfidf_matrix = None
         self.openai_client = None
 
-        # Configuration
         self.setup_cors()
         self.setup_routes()
         self.initialize_models()
 
     def setup_cors(self):
-        """Setup CORS middleware"""
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -83,7 +77,6 @@ class TDSVirtualTA:
         )
 
     def setup_routes(self):
-        """Setup FastAPI routes"""
 
         @self.app.get("/")
         async def root():
@@ -131,7 +124,6 @@ class TDSVirtualTA:
             start_time = datetime.now()
 
             try:
-                # Process the question
                 answer, links, confidence = await self.process_question(
                     request.question,
                     request.image,
@@ -152,11 +144,10 @@ class TDSVirtualTA:
                 raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
 
     def initialize_models(self):
-        """Initialize ML models and load data"""
         try:
             logger.info("Initializing models and loading data...")
 
-            # Initialize AI Proxy client
+            load_dotenv()
             aiproxy_token = os.getenv('AIPROXY_TOKEN')
             if aiproxy_token:
                 self.openai_client = OpenAI(
@@ -165,7 +156,6 @@ class TDSVirtualTA:
                 )
                 logger.info("AI Proxy client initialized successfully")
 
-                # Test connection
                 try:
                     test_response = self.openai_client.chat.completions.create(
                         model="gpt-3.5-turbo-0125",
@@ -185,14 +175,11 @@ class TDSVirtualTA:
                 else:
                     logger.warning("No API keys found. AI features will be limited.")
 
-            # Load discourse data
             self.load_discourse_data()
 
-            # Initialize embedding model
             self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
             logger.info("Embedding model loaded")
 
-            # Build search indices
             if self.discourse_data:
                 self.build_search_indices()
                 logger.info("Search indices built")
@@ -201,11 +188,10 @@ class TDSVirtualTA:
             logger.error(f"Error initializing models: {e}")
 
     def load_discourse_data(self):
-        """Load scraped discourse data"""
         data_files = [
             'tds_discourse_posts_improved.json',
             'tds_discourse_posts_highspeed.json',
-            'tds_discourse_posts.json'  # Fallback
+            'tds_discourse_posts.json'
         ]
 
         for file_path in data_files:
@@ -224,7 +210,6 @@ class TDSVirtualTA:
             self.create_sample_data()
 
     def create_sample_data(self):
-        """Create sample data for testing when no scraped data is available"""
         self.discourse_data = [
             {
                 "title": "GPT Model Selection for TDS Projects",
@@ -258,27 +243,21 @@ class TDSVirtualTA:
         logger.info(f"Created {len(self.discourse_data)} sample posts")
 
     def build_search_indices(self):
-        """Build FAISS and TF-IDF search indices"""
         try:
-            # Prepare texts for indexing
             texts = []
             for post in self.discourse_data:
                 text = f"{post.get('title', '')} {post.get('content', '')}"
                 texts.append(text)
 
-            # Build embeddings and FAISS index
             logger.info("Building embeddings...")
             self.embeddings = self.embedding_model.encode(texts)
 
-            # Create FAISS index
             dimension = self.embeddings.shape[1]
-            self.faiss_index = faiss.IndexFlatIP(dimension)  # Inner product (cosine similarity)
+            self.faiss_index = faiss.IndexFlatIP(dimension)
 
-            # Normalize embeddings for cosine similarity
             faiss.normalize_L2(self.embeddings)
             self.faiss_index.add(self.embeddings.astype('float32'))
 
-            # Build TF-IDF index
             logger.info("Building TF-IDF index...")
             self.tfidf_vectorizer = TfidfVectorizer(
                 max_features=5000,
@@ -295,14 +274,12 @@ class TDSVirtualTA:
             logger.error(f"Error building search indices: {e}")
 
     def search_similar_posts(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Search for similar posts using both semantic and keyword search"""
         if not self.discourse_data:
             return []
 
         results = []
 
         try:
-            # Semantic search using FAISS
             if self.faiss_index is not None:
                 query_embedding = self.embedding_model.encode([query])
                 faiss.normalize_L2(query_embedding)
@@ -319,17 +296,14 @@ class TDSVirtualTA:
                         post['rank'] = i
                         results.append(post)
 
-            # Keyword search using TF-IDF
             if self.tfidf_vectorizer is not None and self.tfidf_matrix is not None:
                 query_vector = self.tfidf_vectorizer.transform([query])
                 tfidf_scores = cosine_similarity(query_vector, self.tfidf_matrix)[0]
 
-                # Get top TF-IDF results
                 top_tfidf_indices = tfidf_scores.argsort()[::-1][:top_k]
 
                 for idx in top_tfidf_indices:
-                    if tfidf_scores[idx] > 0.1:  # Minimum relevance threshold
-                        # Check if already in results
+                    if tfidf_scores[idx] > 0.1:
                         existing = next((r for r in results if r.get('url') == self.discourse_data[idx].get('url')), None)
                         if existing:
                             existing['tfidf_score'] = float(tfidf_scores[idx])
@@ -339,14 +313,11 @@ class TDSVirtualTA:
                             post['semantic_score'] = 0.0
                             results.append(post)
 
-            # Combine and rank results
             for result in results:
                 semantic_score = result.get('semantic_score', 0.0)
                 tfidf_score = result.get('tfidf_score', 0.0)
-                # Weighted combination
                 result['combined_score'] = 0.7 * semantic_score + 0.3 * tfidf_score
 
-            # Sort by combined score and return top results
             results.sort(key=lambda x: x['combined_score'], reverse=True)
             return results[:top_k]
 
@@ -355,10 +326,8 @@ class TDSVirtualTA:
             return []
 
     async def process_image(self, image_input: str) -> str:
-        """Handle both base64 and file:// paths for images"""
         if image_input.startswith("file://"):
-            # Handle file path from promptfoo
-            file_path = image_input[7:]  # Remove 'file://' prefix
+            file_path = image_input[7:]
             try:
                 with open(file_path, "rb") as f:
                     image_data = f.read()
@@ -368,7 +337,6 @@ class TDSVirtualTA:
                 logger.error(f"Error reading image file: {e}")
                 return "Could not process the provided image file"
         elif re.match(r'^[A-Za-z0-9+/=]+$', image_input):
-            # Regular base64 processing
             try:
                 image_data = base64.b64decode(image_input)
                 image = Image.open(BytesIO(image_data))
@@ -379,22 +347,17 @@ class TDSVirtualTA:
         return "Invalid image format"
 
     async def process_question(self, question: str, image: Optional[str] = None, context: Optional[str] = None) -> tuple:
-        """Process student question and generate answer"""
         try:
-            # Search for relevant posts
             relevant_posts = self.search_similar_posts(question, top_k=5)
 
-            # Process image if provided
             image_description = ""
             if image:
                 image_description = await self.process_image(image)
 
-            # Generate answer
             answer = await self.generate_answer(question, relevant_posts, image_description, context)
 
-            # Create links from relevant posts
             links = []
-            for post in relevant_posts[:3]:  # Top 3 most relevant
+            for post in relevant_posts[:3]:
                 if post.get('url') and post.get('combined_score', 0) > 0.1:
                     content = post.get('content', '')
                     snippet = self.extract_relevant_snippet(content, question)
@@ -403,7 +366,6 @@ class TDSVirtualTA:
                         text=snippet[:200] + "..." if len(snippet) > 200 else snippet
                     ))
 
-            # Calculate confidence
             confidence = self.calculate_confidence(relevant_posts)
 
             return answer, links, confidence
@@ -413,15 +375,12 @@ class TDSVirtualTA:
             return "I'm sorry, I encountered an error while processing your question. Please try again.", [], 0.0
 
     async def generate_answer(self, question: str, relevant_posts: List[Dict], image_description: str = "", context: str = "") -> str:
-        """Generate answer using AI Proxy or fallback to template-based response"""
-        # Prepare context from relevant posts
         context_text = ""
         for post in relevant_posts:
             context_text += f"Title: {post.get('title', '')}\n"
             context_text += f"Content: {post.get('content', '')}\n"
             context_text += f"Author: {post.get('author', '')}\n\n"
 
-        # Try AI Proxy first if available
         if self.openai_client:
             try:
                 prompt = self.create_gpt_prompt(question, context_text, image_description, context)
@@ -442,11 +401,9 @@ class TDSVirtualTA:
                 logger.error(f"Error with AI Proxy: {e}")
                 logger.info("Falling back to template-based response")
 
-        # Fallback to template-based response
         return self.generate_template_answer(question, relevant_posts)
 
     def create_gpt_prompt(self, question: str, context: str, image_description: str = "", user_context: str = "") -> str:
-        """Create prompt for GPT"""
         prompt = f"""Based on the following context from the TDS course forum, please answer the student's question:
 
 CONTEXT:
@@ -470,7 +427,6 @@ CONTEXT:
         return prompt
 
     def generate_template_answer(self, question: str, relevant_posts: List[Dict]) -> str:
-        """Generate template-based answer when AI Proxy is not available"""
         question_lower = question.lower()
 
         if any(term in question_lower for term in ['gpt', 'model', 'api']):
@@ -488,7 +444,6 @@ CONTEXT:
         if any(term in question_lower for term in ['pandas', 'numpy', 'python', 'data']):
             return "For data analysis tasks, ensure proper data cleaning, handle missing values, and use vectorized operations for better performance. Refer to the course materials and forum discussions for specific implementation details."
 
-        # Default response with context from relevant posts
         if relevant_posts:
             best_post = relevant_posts[0]
             content = best_post.get('content', '')
@@ -499,7 +454,6 @@ CONTEXT:
         return "I found some relevant information in the course forum. Please check the provided links for detailed discussions on your topic."
 
     def extract_relevant_snippet(self, content: str, question: str) -> str:
-        """Extract relevant snippet from content based on question"""
         question_words = set(question.lower().split())
         sentences = content.split('. ')
 
@@ -516,18 +470,15 @@ CONTEXT:
         return best_sentence if best_sentence else (sentences[0] if sentences else content[:200])
 
     def calculate_confidence(self, relevant_posts: List[Dict]) -> float:
-        """Calculate confidence score based on search results"""
         if not relevant_posts:
             return 0.0
 
         best_score = relevant_posts[0].get('combined_score', 0.0)
         return round(min(best_score, 1.0), 3)
 
-# Initialize the Virtual TA
 virtual_ta = TDSVirtualTA()
 app = virtual_ta.app
 
-# Add startup event
 @app.on_event("startup")
 async def startup_event():
     logger.info("TDS Virtual TA API starting up...")
